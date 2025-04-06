@@ -8,6 +8,8 @@ require (
 	github.com/karalabe/hid v1.0.0
 )
 
+require github.com/gorilla/websocket v1.5.3 // indirect
+
 require (
 	github.com/mattn/go-colorable v0.1.6 // indirect
 	github.com/mattn/go-isatty v0.0.12 // indirect

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Square Control</title>
+    <style>
+        #square {
+            width: 50px;
+            height: 50px;
+            background-color: blue;
+            position: absolute;
+            top: 100px;
+            left: 100px;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Square Control</h1>
+    <div id="square"></div>
+    <p id="status">Connecting to WebSocket...</p>
+
+    <script>
+        const square = document.getElementById('square');
+        const statusText = document.getElementById('status');
+        
+        // Начальная позиция квадрата
+        let posX = 100;
+        let posY = 100;
+        const step = 10; 
+        
+        // Подключаемся к WebSocket серверу (замените URL на свой)
+        const ws = new WebSocket('ws://localhost:8080/ws');
+        
+        ws.onopen = function() {
+            statusText.textContent = 'Connected to WebSocket!';
+        };
+        
+        ws.onerror = function(error) {
+            statusText.textContent = 'WebSocket Error: ' + error;
+        };
+        
+        ws.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                statusText.textContent = 'Received: ' + event.data;
+                
+                // Обрабатываем направления
+                if (data.up) posY -= step;
+                if (data.down) posY += step;
+                if (data.left) posX -= step;
+                if (data.right) posX += step;
+                
+                square.style.left = posX + 'px';
+                square.style.top = posY + 'px';
+                
+            } catch (e) {
+                statusText.textContent = 'Error parsing data: ' + e;
+            }
+        };
+    </script>
+</body>
+</html>
