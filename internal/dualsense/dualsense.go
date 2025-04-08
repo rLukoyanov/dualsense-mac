@@ -1,8 +1,11 @@
 package dualsense
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/sstallion/go-hid"
@@ -13,6 +16,11 @@ const (
 	DualSenseUSB = 0x0ce6
 	StickNeutral = 0x80
 )
+
+type DualSenseDevice struct {
+	device *hid.Device
+	Mx     *sync.Mutex
+}
 
 type DualSenseReport struct {
 	ReportID     uint8
@@ -48,17 +56,37 @@ type DualSenseState struct {
 	}
 }
 
-type DualSenseOutputReport struct {
-	ReportID byte
-	_        [1]byte
-	Flags    byte
-	Red      byte
-	Green    byte
-	Blue     byte
-	_        [44]byte
+func (d *DualSenseDevice) SetDualSenseColor(r, g, b byte) error {
+	data := []byte{
+		49, 112, 16, 255, 247, 0, 0, 0, 0, 0, 0,
+		0, 16, 38, 144, 160, 255, 0, 0, 0, 0,
+		0, 0, 0, 38, 144, 160, 255, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 2, 0, 2, 0, 0, byte(r), byte(g), byte(b), 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 79, 52, 31, 57,
+	}
+
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, &data); err != nil {
+		return fmt.Errorf("binary write failed: %v", err)
+	}
+
+	n, err := d.device.Write(buf.Bytes())
+	if err != nil {
+		return fmt.Errorf("device write failed: %v", err)
+	}
+	if n != len(buf.Bytes()) {
+		return fmt.Errorf("incomplete write: %d/%d bytes", n, len(buf.Bytes()))
+	}
+
+	log.Printf("Отправлено %d байт: [% X]", n, buf.Bytes())
+	return nil
 }
 
-func ConnectDualsense() {
+func (d *DualSenseDevice) ConnectDualsense() {
+	d.Mx.Lock()
 	if err := hid.Init(); err != nil {
 		log.Fatalf("хуй: %v", err)
 	}
@@ -67,26 +95,41 @@ func ConnectDualsense() {
 	if err != nil {
 		log.Fatal("Connect error:", err)
 	}
-	defer device.Close()
+
+	reportID := byte(0x05)
+	report := make([]byte, 64)
+	report[0] = reportID
+	n, err := device.GetFeatureReport(report)
+	if err != nil {
+		log.Fatal("Connect error:", err)
+	}
+
+	d.device = device
+	log.Printf("device connectted:%v bytes: %v\n", d.device, n)
+	d.Mx.Unlock()
+}
+
+func (d *DualSenseDevice) Read(ch chan DualSenseState) {
+	log.Println("device reading", d.device)
 
 	buf := make([]byte, 64)
 	for {
-		n, err := device.Read(buf)
+		n, err := d.device.Read(buf)
+		log.Println(n, buf)
 		if err != nil {
-			log.Printf("Read error: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}
 
 		if n >= 10 && buf[0] == 0x01 {
-			processInput(buf[:n])
+			ch <- processInput(buf[:n])
 		}
 
 		time.Sleep(16 * time.Millisecond)
 	}
 }
 
-func processInput(data []byte) {
+func processInput(data []byte) DualSenseState {
 	// 01 7d 7e 83 82 08 00 00 00 00 хуйня с блютуза
 	report := DualSenseReport{
 		ReportID:     data[0],      // 0x01
@@ -104,6 +147,7 @@ func processInput(data []byte) {
 
 	state := parseReport(report)
 	printState(state)
+	return state
 }
 
 func parseReport(report DualSenseReport) DualSenseState {
@@ -116,21 +160,21 @@ func parseReport(report DualSenseReport) DualSenseState {
 
 	switch report.DPadButtons & 0x0F {
 	case 0x0:
-		state.DPad = "North"
+		state.DPad = "up"
 	case 0x1:
-		state.DPad = "North-East"
+		state.DPad = "up-rigth"
 	case 0x2:
-		state.DPad = "East"
+		state.DPad = "right"
 	case 0x3:
-		state.DPad = "South-East"
+		state.DPad = "down-rigth"
 	case 0x4:
-		state.DPad = "South"
+		state.DPad = "down"
 	case 0x5:
-		state.DPad = "South-West"
+		state.DPad = "down-left"
 	case 0x6:
-		state.DPad = "West"
+		state.DPad = "left"
 	case 0x7:
-		state.DPad = "North-West"
+		state.DPad = "up-left"
 	case 0x8:
 		state.DPad = "Neutral"
 	}

@@ -1,9 +1,10 @@
 package main
 
 import (
+	"driver/internal/dualsense"
 	"log"
-	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -22,15 +23,15 @@ type Direction struct {
 	Right bool `json:"right"`
 }
 
-func main() {
-	http.HandleFunc("/ws", wsHandler)
-	http.Handle("/", http.FileServer(http.Dir("."))) // Для обслуживания HTML файла
-
-	log.Println("Server starting on :8080...")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+type handler struct {
+	dualsenseChannel chan dualsense.DualSenseState
 }
 
-func wsHandler(w http.ResponseWriter, r *http.Request) {
+func NewHandler(dualsenseChannel chan dualsense.DualSenseState) *handler {
+	return &handler{dualsenseChannel}
+}
+
+func (h *handler) wsHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Upgrade error:", err)
@@ -40,17 +41,25 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Client connected")
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			dir := Direction{
-				Up:    rand.Intn(2) == 1,
-				Down:  rand.Intn(2) == 1,
-				Left:  rand.Intn(2) == 1,
-				Right: rand.Intn(2) == 1,
+			dsState := <-h.dualsenseChannel
+
+			dir := Direction{}
+
+			switch dsState.DPad {
+			case "up":
+				dir.Up = true
+			case "down":
+				dir.Down = true
+			case "left":
+				dir.Left = true
+			case "right":
+				dir.Right = true
 			}
 
 			err := conn.WriteJSON(dir)
@@ -60,4 +69,24 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func main() {
+	dsStateCh := make(chan dualsense.DualSenseState, 1)
+	var mx sync.Mutex
+	d := dualsense.DualSenseDevice{Mx: &mx}
+	d.ConnectDualsense()
+	// d.SetDualSenseColor(2, 225, 2)
+	// go d.Read(dsStateCh)
+
+	h := NewHandler(dsStateCh)
+
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		h.wsHandler(w, r)
+	})
+	http.Handle("/", http.FileServer(http.Dir(".")))
+
+	log.Println("Server starting on :8080...")
+	log.Fatal(http.ListenAndServe(":8080", nil))
+
 }
