@@ -58,14 +58,9 @@ type DualSenseState struct {
 
 func (d *DualSenseDevice) SetDualSenseColor(r, g, b byte) error {
 	data := []byte{
-		49, 112, 16, 255, 247, 0, 0, 0, 0, 0, 0,
-		0, 16, 38, 144, 160, 255, 0, 0, 0, 0,
-		0, 0, 0, 38, 144, 160, 255, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 2, 0, 2, 0, 0, byte(r), byte(g), byte(b), 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 79, 52, 31, 57,
+		0x02, 0xff, 0xf7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, r, g, b,
 	}
 
 	buf := new(bytes.Buffer)
@@ -86,7 +81,6 @@ func (d *DualSenseDevice) SetDualSenseColor(r, g, b byte) error {
 }
 
 func (d *DualSenseDevice) ConnectDualsense() {
-	d.Mx.Lock()
 	if err := hid.Init(); err != nil {
 		log.Fatalf("хуй: %v", err)
 	}
@@ -96,67 +90,42 @@ func (d *DualSenseDevice) ConnectDualsense() {
 		log.Fatal("Connect error:", err)
 	}
 
-	reportID := byte(0x05)
-	report := make([]byte, 64)
-	report[0] = reportID
-	n, err := device.GetFeatureReport(report)
 	if err != nil {
 		log.Fatal("Connect error:", err)
 	}
 
 	d.device = device
-	log.Printf("device connectted:%v bytes: %v\n", d.device, n)
-	d.Mx.Unlock()
 }
 
 func (d *DualSenseDevice) Read(ch chan DualSenseState) {
 	log.Println("device reading", d.device)
 
-	buf := make([]byte, 64)
+	buf := make([]byte, 78)
 	for {
 		n, err := d.device.Read(buf)
-		log.Println(n, buf)
 		if err != nil {
 			time.Sleep(time.Second)
 			continue
 		}
 
-		if n >= 10 && buf[0] == 0x01 {
-			ch <- processInput(buf[:n])
-		}
+		ch <- processInput(buf[:n])
 
 		time.Sleep(16 * time.Millisecond)
 	}
 }
 
 func processInput(data []byte) DualSenseState {
-	// 01 7d 7e 83 82 08 00 00 00 00 хуйня с блютуза
 	report := DualSenseReport{
-		ReportID:     data[0],      // 0x01
-		LeftX:        data[1],      // 0x7d
-		LeftY:        data[2],      // 0x7e
-		RightX:       data[3],      // 0x83
-		RightY:       data[4],      // 0x82
-		DPadButtons:  data[5],      // 0x08
-		Buttons1:     data[5] >> 4, // Верхние 4 бита
-		Buttons2:     data[6],      // 0x00
-		Buttons3:     data[7],      // 0x00
-		LeftTrigger:  data[8],      // 0x00
-		RightTrigger: data[9],      // 0x00
+		ReportID:    data[0],
+		DPadButtons: data[8],
 	}
 
 	state := parseReport(report)
-	printState(state)
 	return state
 }
 
 func parseReport(report DualSenseReport) DualSenseState {
 	var state DualSenseState
-
-	state.LeftStick.X = int((float64(report.LeftX) - StickNeutral) / StickNeutral * 100)
-	state.LeftStick.Y = int((float64(report.LeftY) - StickNeutral) / StickNeutral * 100)
-	state.RightStick.X = int((float64(report.RightX) - StickNeutral) / StickNeutral * 100)
-	state.RightStick.Y = int((float64(report.RightY) - StickNeutral) / StickNeutral * 100)
 
 	switch report.DPadButtons & 0x0F {
 	case 0x0:
@@ -179,47 +148,5 @@ func parseReport(report DualSenseReport) DualSenseState {
 		state.DPad = "Neutral"
 	}
 
-	state.Buttons.Square = report.Buttons1&0x01 > 0
-	state.Buttons.Cross = report.Buttons1&0x02 > 0
-	state.Buttons.Circle = report.Buttons1&0x04 > 0
-	state.Buttons.Triangle = report.Buttons1&0x08 > 0
-
-	state.Buttons.Options = report.Buttons2&0x10 > 0
-	state.Buttons.R1 = report.Buttons2&0x20 > 0
-	state.Buttons.L3 = report.Buttons2&0x40 > 0
-	state.Buttons.R3 = report.Buttons2&0x80 > 0
-	state.Buttons.L1 = report.Buttons2&0x01 > 0
-	state.Buttons.R1 = report.Buttons2&0x02 > 0
-
-	state.Buttons.PS = report.Buttons3&0x01 > 0
-	state.Buttons.Touchpad = report.Buttons3&0x02 > 0
-
-	state.Triggers.Left = uint8(float64(report.LeftTrigger) / 2.55)
-	state.Triggers.Right = uint8(float64(report.RightTrigger) / 2.55)
-
 	return state
-}
-
-func printState(state DualSenseState) {
-	fmt.Printf("\033[H\033[2J")
-	fmt.Println("=== DualSense State ===")
-
-	fmt.Printf("\nстики:\n")
-	fmt.Printf("Left:  X=%-4d%% Y=%-4d%%\n", state.LeftStick.X, state.LeftStick.Y)
-	fmt.Printf("Right: X=%-4d%% Y=%-4d%%\n", state.RightStick.X, state.RightStick.Y)
-
-	fmt.Printf("\nКнопки:\n")
-	fmt.Printf("Фигуры: △=%v ○=%v ×=%v □=%v\n",
-		state.Buttons.Triangle, state.Buttons.Circle,
-		state.Buttons.Cross, state.Buttons.Square)
-
-	fmt.Printf("\nD-pad: %s\n", state.DPad)
-	fmt.Printf("L1=%v R1=%v L3=%v R3=%v\n",
-		state.Buttons.L1, state.Buttons.R1,
-		state.Buttons.L3, state.Buttons.R3)
-	fmt.Printf("Triggers: L2=%-3d%% R2=%-3d%%\n",
-		state.Triggers.Left, state.Triggers.Right)
-
-	fmt.Printf("System: PS=%v Touchpad=%v\n",
-		state.Buttons.PS, state.Buttons.Touchpad)
 }

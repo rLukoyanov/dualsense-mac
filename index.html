@@ -12,6 +12,14 @@
             position: absolute;
             top: 100px;
             left: 100px;
+            transition: background-color 0.3s;
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 10px;
         }
     </style>
 </head>
@@ -19,10 +27,16 @@
     <h1>WebSocket Square Control</h1>
     <div id="square"></div>
     <p id="status">Connecting to WebSocket...</p>
+    
+    <div class="controls">
+        <label for="colorPicker">Square Color:</label>
+        <input type="color" id="colorPicker" value="#0000ff">
+    </div>
 
     <script>
         const square = document.getElementById('square');
         const statusText = document.getElementById('status');
+        const colorPicker = document.getElementById('colorPicker');
         
         // Начальная позиция квадрата
         let posX = 100;
@@ -34,6 +48,8 @@
         
         ws.onopen = function() {
             statusText.textContent = 'Connected to WebSocket!';
+            // Отправляем текущий цвет при подключении
+            sendColorUpdate(colorPicker.value);
         };
         
         ws.onerror = function(error) {
@@ -51,6 +67,12 @@
                 if (data.left) posX -= step;
                 if (data.right) posX += step;
                 
+                // Обрабатываем изменение цвета
+                if (data.color) {
+                    square.style.backgroundColor = data.color;
+                    colorPicker.value = data.color;
+                }
+                
                 square.style.left = posX + 'px';
                 square.style.top = posY + 'px';
                 
@@ -58,6 +80,22 @@
                 statusText.textContent = 'Error parsing data: ' + e;
             }
         };
+        
+        // Обработчик изменения цвета
+        colorPicker.addEventListener('input', function() {
+            const color = this.value;
+            square.style.backgroundColor = color;
+            sendColorUpdate(color);
+        });
+        
+        // Функция для отправки цвета
+        function sendColorUpdate(color) {
+            if (ws.readyState === WebSocket.OPEN) {
+                const message = JSON.stringify({ color: color });
+                ws.send(message);
+                statusText.textContent = 'Sent color: ' + color;
+            }
+        }
     </script>
 </body>
 </html>

@@ -2,9 +2,9 @@ package main
 
 import (
 	"driver/internal/dualsense"
+	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -23,12 +23,20 @@ type Direction struct {
 	Right bool `json:"right"`
 }
 
-type handler struct {
-	dualsenseChannel chan dualsense.DualSenseState
+type ColorMessage struct {
+	Color string `json:"color"`
 }
 
-func NewHandler(dualsenseChannel chan dualsense.DualSenseState) *handler {
-	return &handler{dualsenseChannel}
+type handler struct {
+	dualsenseChannel chan dualsense.DualSenseState
+	d                dualsense.DualSenseDevice
+}
+
+func NewHandler(dualsenseChannel chan dualsense.DualSenseState, d dualsense.DualSenseDevice) *handler {
+	return &handler{
+		dualsenseChannel: dualsenseChannel,
+		d:                d,
+	}
 }
 
 func (h *handler) wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -39,15 +47,31 @@ func (h *handler) wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	log.Println("Client connected")
+	// Канал для сообщений от клиента
+	clientMessages := make(chan ColorMessage)
+	defer close(clientMessages)
+
+	// Горутина для чтения сообщений от клиента
+	go func() {
+		for {
+			var msg ColorMessage
+			err := conn.ReadJSON(&msg)
+			if err != nil {
+				log.Println("Read error:", err)
+				return
+			}
+			clientMessages <- msg
+		}
+	}()
 
 	ticker := time.NewTicker(16 * time.Millisecond)
 	defer ticker.Stop()
 
+	log.Println("Client connected")
 	for {
 		select {
-		case <-ticker.C:
-			dsState := <-h.dualsenseChannel
+		case v := <-h.dualsenseChannel:
+			dsState := v
 
 			dir := Direction{}
 
@@ -64,22 +88,53 @@ func (h *handler) wsHandler(w http.ResponseWriter, r *http.Request) {
 
 			err := conn.WriteJSON(dir)
 			if err != nil {
-				log.Println("Write error:", err)
+				log.Println("Write direction error:", err)
 				return
 			}
+
+		case msg := <-clientMessages:
+			// Обработка сообщения с цветом от клиента
+			log.Printf("Received color: %s", msg.Color)
+
+			if r, g, b, err := ParseHexColor(msg.Color); err == nil {
+				h.d.SetDualSenseColor(r, g, b)
+			}
+
+		case <-ticker.C:
+			// Тикер для поддержания соединения
 		}
 	}
 }
 
+// ParseHexColor преобразует hex-строку (#RRGGBB) в RGB значения
+func ParseHexColor(s string) (r, g, b uint8, err error) {
+	if len(s) != 7 || s[0] != '#' {
+		return 0, 0, 0, fmt.Errorf("invalid color format")
+	}
+	hexToByte := func(b byte) uint8 {
+		switch {
+		case b >= '0' && b <= '9':
+			return b - '0'
+		case b >= 'a' && b <= 'f':
+			return 10 + b - 'a'
+		case b >= 'A' && b <= 'F':
+			return 10 + b - 'A'
+		}
+		return 0
+	}
+	r = hexToByte(s[1])<<4 + hexToByte(s[2])
+	g = hexToByte(s[3])<<4 + hexToByte(s[4])
+	b = hexToByte(s[5])<<4 + hexToByte(s[6])
+	return r, g, b, nil
+}
+
 func main() {
 	dsStateCh := make(chan dualsense.DualSenseState, 1)
-	var mx sync.Mutex
-	d := dualsense.DualSenseDevice{Mx: &mx}
+	d := dualsense.DualSenseDevice{}
 	d.ConnectDualsense()
-	// d.SetDualSenseColor(2, 225, 2)
-	// go d.Read(dsStateCh)
+	go d.Read(dsStateCh)
 
-	h := NewHandler(dsStateCh)
+	h := NewHandler(dsStateCh, d)
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		h.wsHandler(w, r)
@@ -88,5 +143,4 @@ func main() {
 
 	log.Println("Server starting on :8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
-
 }
